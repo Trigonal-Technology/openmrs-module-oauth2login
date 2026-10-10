@@ -78,7 +78,13 @@ public class OAuth2LoginRequestFilter implements Filter {
 			
 			// Login
 			if (!Context.isAuthenticated()) {
-				// non-authenticated requests are forwarded to the module login controller
+				// The REST and FHIR APIs answer 401, as OpenMRS does without central login: a redirect to a login
+				// page means nothing to a machine caller or a browser XHR (KC-59-02).
+				if (requestURI.startsWith("/ws/")) {
+					httpResponse.sendError(HttpServletResponse.SC_UNAUTHORIZED);
+					return;
+				}
+				// non-authenticated page requests are forwarded to the module login controller
 				httpResponse.sendRedirect(httpRequest.getContextPath() + "/oauth2login");
 				return;
 			}

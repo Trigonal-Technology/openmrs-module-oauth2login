@@ -34,13 +34,13 @@ public class CustomLogoutSuccessHandlerTest {
 		//setup
 		PowerMockito.mockStatic(Context.class);
 		User user = new User();
-		user.setUserProperty(OAuth2LoginConstants.USER_PROP_ID_TOKEN, idToken);
 		Mockito.when(Context.getAuthenticatedUser()).thenReturn(user);
 		
 		CustomLogoutSuccessHandler customLogoutSuccessHandler = new CustomLogoutSuccessHandler();
 		RedirectStrategy redirectStrategy = mock(RedirectStrategy.class);
 		customLogoutSuccessHandler.setRedirectStrategy(redirectStrategy);
 		MockHttpServletRequest request = new MockHttpServletRequest();
+		request.getSession().setAttribute(OAuth2LoginConstants.USER_PROP_ID_TOKEN, idToken);
 		HttpServletResponse response = mock(HttpServletResponse.class);
 		//replay
 		customLogoutSuccessHandler.onLogoutSuccess(request, response, null);

@@ -42,8 +42,9 @@ public class Utils {
 		//the redirect path can contain a [token] that should be replaced by the auth token
 		if (StringUtils.isNoneBlank(redirectPath) && redirectPath.contains("[token]")) {
 			String token = null;
-			if (Context.getAuthenticatedUser() != null) {
-				token = Context.getAuthenticatedUser().getUserProperty(OAuth2LoginConstants.USER_PROP_ID_TOKEN);
+			javax.servlet.http.HttpSession session = request.getSession(false);
+			if (session != null && session.getAttribute(OAuth2LoginConstants.USER_PROP_ID_TOKEN) instanceof String) {
+				token = (String) session.getAttribute(OAuth2LoginConstants.USER_PROP_ID_TOKEN);
 			}
 			
 			if (StringUtils.isNotBlank(token)) {

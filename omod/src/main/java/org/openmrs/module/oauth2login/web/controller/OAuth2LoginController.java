@@ -12,6 +12,8 @@ package org.openmrs.module.oauth2login.web.controller;
 import static org.springframework.web.bind.annotation.RequestMethod.GET;
 
 import java.net.URI;
+
+import javax.servlet.http.HttpServletRequest;
 import java.net.URISyntaxException;
 import java.util.Collection;
 import java.util.Properties;
@@ -78,7 +80,7 @@ public class OAuth2LoginController {
 	}
 	
 	@RequestMapping(value = "/oauth2login", method = GET)
-	public ModelAndView login() {
+	public ModelAndView login(HttpServletRequest request) {
 		
 		authenticateWithSpringSecurity();
 		
@@ -97,7 +99,9 @@ public class OAuth2LoginController {
 				User user = Context.getAuthenticatedUser();
 				final String idToken = ((OAuth2RestOperations) restTemplate).getAccessToken().getAdditionalInformation()
 				        .get("id_token").toString();
-				user.setUserProperty(OAuth2LoginConstants.USER_PROP_ID_TOKEN, idToken);
+				// Session only: a user property is stored in the DB and readable over REST (v=full) by
+				// anyone with Get Users. It is only needed as id_token_hint at logout (Utils).
+				request.getSession().setAttribute(OAuth2LoginConstants.USER_PROP_ID_TOKEN, idToken);
 				if ("true".equalsIgnoreCase(userInfo.getString(UserInfo.PROP_PROVIDER, "true"))) {
 					activateProviderAccount(Context.getAuthenticatedUser());
 				} else {

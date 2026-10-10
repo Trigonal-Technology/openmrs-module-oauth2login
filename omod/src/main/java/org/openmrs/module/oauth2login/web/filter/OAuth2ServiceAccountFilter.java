@@ -42,6 +42,7 @@ public class OAuth2ServiceAccountFilter implements Filter {
 	
 	public static final String HEADER_NAME_AUTH = "Authorization";
 	
+	/** No longer read (see doFilter); kept so callers and tests can assert it is ignored. */
 	public static final String HEADER_NAME_X_JWT_ASSERT = "X-JWT-Assertion";
 	
 	public static final String SCHEME_BEARER = "Bearer";
@@ -73,12 +74,13 @@ public class OAuth2ServiceAccountFilter implements Filter {
 		if (request instanceof HttpServletRequest) {
 			//TODO should we limit this authentication mechanism to webservice calls only?
 			HttpServletRequest httpRequest = (HttpServletRequest) request;
+			// Only "Authorization: Bearer <jwt>". X-JWT-Assertion is no longer read: a proxy that forwards
+			// client headers would otherwise let any caller present a token there.
 			String headerValue = httpRequest.getHeader(HEADER_NAME_AUTH);
-			String token;
-			if (StringUtils.isNotBlank(headerValue)) {
-				token = headerValue.substring(SCHEME_BEARER.length() + 1);
-			} else {
-				token = httpRequest.getHeader(HEADER_NAME_X_JWT_ASSERT);
+			String token = null;
+			if (headerValue != null
+			        && headerValue.regionMatches(true, 0, SCHEME_BEARER + " ", 0, SCHEME_BEARER.length() + 1)) {
+				token = headerValue.substring(SCHEME_BEARER.length() + 1).trim();
 			}
 			
 			if (StringUtils.isNotBlank(token)) {
@@ -99,8 +101,14 @@ public class OAuth2ServiceAccountFilter implements Filter {
 						}
 						
 						Claims claims = JwtUtils.parseAndVerifyToken(token, props);
-						String userInfoJson = JsonUtil.toJson(claims);
-						Context.authenticate(new OAuth2TokenCredentials(new UserInfo(props, userInfoJson), true));
+						// The signature only proves the realm issued it; require a configured machine client.
+						String refusal = ServiceAccountTokenPolicy.refusal(claims, props, serviceAccountProperty);
+						if (refusal != null) {
+							log.warn("Refusing service-account login: {}", refusal);
+						} else {
+							String userInfoJson = JsonUtil.toJson(claims);
+							Context.authenticate(new OAuth2TokenCredentials(new UserInfo(props, userInfoJson), true));
+						}
 					}
 					catch (Throwable e) {
 						//Ignore and let the API take care of authentication issues

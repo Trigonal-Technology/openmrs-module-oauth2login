@@ -67,7 +67,7 @@ public class ProviderAttributeUserInfoTest extends OAuth2IntegrationTest {
 		}
 		
 		// replay
-		controller.login();
+		controller.login(new org.springframework.mock.web.MockHttpServletRequest());
 		
 		// verif
 		User user = Context.getAuthenticatedUser();

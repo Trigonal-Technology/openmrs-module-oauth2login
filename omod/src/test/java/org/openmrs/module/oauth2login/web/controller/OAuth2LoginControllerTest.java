@@ -81,9 +81,12 @@ public class OAuth2LoginControllerTest {
 		Whitebox.setInternalState(controller, "userService", mockUserService);
 		Mockito.when(Context.getAdministrationService()).thenReturn(mockAdminService);
 		
-		controller.login();
+		org.springframework.mock.web.MockHttpServletRequest request = new org.springframework.mock.web.MockHttpServletRequest();
+		controller.login(request);
 		
-		Assert.assertEquals(idToken, user.getUserProperty(OAuth2LoginConstants.USER_PROP_ID_TOKEN));
+		// KC-58-09: the id_token lives in the HTTP session only, never in a (persisted, REST-readable) user property
+		Assert.assertEquals(idToken, request.getSession().getAttribute(OAuth2LoginConstants.USER_PROP_ID_TOKEN));
+		Assert.assertNull(user.getUserProperty(OAuth2LoginConstants.USER_PROP_ID_TOKEN, null));
 	}
 	
 }

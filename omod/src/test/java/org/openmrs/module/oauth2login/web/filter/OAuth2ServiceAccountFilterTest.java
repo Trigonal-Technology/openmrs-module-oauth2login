@@ -78,7 +78,7 @@ public class OAuth2ServiceAccountFilterTest {
 	}
 	
 	@Test
-	public void doFilter_shouldAuthenticateTheRequestWithATokenSpecifiedWithAuthHeaderAndBearerScheme() throws Exception {
+	public void doFilter_shouldNotAuthenticateWhenNoServiceAccountUsernameMappingIsConfigured() throws Exception {
 		final String jwtToken = "header.payload.signature";
 		when(mockRequest.getHeader(HEADER_NAME_AUTH)).thenReturn(SCHEME_BEARER + " " + jwtToken);
 		
@@ -98,8 +98,9 @@ public class OAuth2ServiceAccountFilterTest {
 		verify(mockProps, times(1)).getProperty(UserInfo.PROP_USERNAME_SERVICE_ACCOUNT, null);
 		//no clone as no PROP_USERNAME_SERVICE_ACCOUNT property is defined
 		verify(mockProps, never()).clone();
-		verifyStatic();
-		Context.authenticate(mockCredentials);
+		// fail closed: without a dedicated service-account mapping a bearer token (e.g. a user's) is not a login
+		verifyStatic(never());
+		Context.authenticate(any());
 	}
 	
 	@Test
@@ -122,9 +123,16 @@ public class OAuth2ServiceAccountFilterTest {
 		props.setProperty(UserInfo.PROP_USERNAME_SERVICE_ACCOUNT, propNameThatWillBeUsed);
 		clonedProperties.setProperty(UserInfo.PROP_USERNAME, "NeverUsedProperty");
 		clonedProperties.setProperty(UserInfo.PROP_USERNAME_SERVICE_ACCOUNT, propNameThatWillBeUsed);
+		clonedProperties.setProperty(ServiceAccountTokenPolicy.PROP_ISSUER, "https://ehr/auth/realms/nidan");
+		clonedProperties.setProperty(ServiceAccountTokenPolicy.PROP_ALLOWED_CLIENTS, "cis");
 		
 		when(Context.getRegisteredComponent(OAUTH_PROP_BEAN_NAME, Properties.class)).thenReturn(props);
-		Claims testClaims = new DefaultClaims(Collections.singletonMap(propNameThatWillBeUsed, username));
+		java.util.Map<String, Object> claimMap = new java.util.HashMap<>();
+		claimMap.put(propNameThatWillBeUsed, username);
+		claimMap.put("iss", "https://ehr/auth/realms/nidan");
+		claimMap.put("typ", "Bearer");
+		claimMap.put("azp", "cis");
+		Claims testClaims = new DefaultClaims(claimMap);
 		when(JwtUtils.parseAndVerifyToken(jwtToken, clonedProperties)).thenReturn(testClaims);
 		whenNew(getAccessibleConstructor(UserInfo.class, Properties.class, String.class)).withArguments(clonedProperties,
 		    JsonUtil.toJson(testClaims)).thenReturn(mockUserInfo);
@@ -142,24 +150,48 @@ public class OAuth2ServiceAccountFilterTest {
 	}
 	
 	@Test
-	public void doFilter_shouldAuthenticateTheRequestWithATokenSpecifiedWithXJwtAssertHeader() throws Exception {
-		final String jwtToken = "header.payload.signature";
-		when(mockRequest.getHeader(HEADER_NAME_X_JWT_ASSERT)).thenReturn(jwtToken);
-		when(Context.getRegisteredComponent(OAUTH_PROP_BEAN_NAME, Properties.class)).thenReturn(mockProps);
-		final String propName = "testProperty";
-		final String username = "testUsername";
-		Claims testClaims = new DefaultClaims(Collections.singletonMap(propName, username));
-		when(JwtUtils.parseAndVerifyToken(jwtToken, mockProps)).thenReturn(testClaims);
-		when(mockProps.getProperty(UserInfo.PROP_USERNAME)).thenReturn(propName);
-		whenNew(getAccessibleConstructor(UserInfo.class, Properties.class, String.class)).withArguments(mockProps,
-		    JsonUtil.toJson(testClaims)).thenReturn(mockUserInfo);
-		whenNew(getAccessibleConstructor(OAuth2TokenCredentials.class, UserInfo.class, boolean.class)).withArguments(
-		    mockUserInfo, true).thenReturn(mockCredentials);
+	public void doFilter_shouldIgnoreATokenInTheXJwtAssertionHeader() throws Exception {
+		when(mockRequest.getHeader(HEADER_NAME_X_JWT_ASSERT)).thenReturn("header.payload.signature");
+		when(mockLogger.isDebugEnabled()).thenReturn(true);
 		
 		filter.doFilter(mockRequest, null, mockFilterChain);
 		
-		verifyStatic();
-		Context.authenticate(mockCredentials);
+		verify(mockLogger).debug("No oauth token specified via supported header names");
+		verifyStatic(never());
+		JwtUtils.parseAndVerifyToken(any(), any());
+	}
+	
+	@Test
+	public void doFilter_shouldIgnoreANonBearerAuthorizationHeader() throws Exception {
+		when(mockRequest.getHeader(HEADER_NAME_AUTH)).thenReturn("Basic header.payload.signature");
+		when(mockLogger.isDebugEnabled()).thenReturn(true);
+		
+		filter.doFilter(mockRequest, null, mockFilterChain);
+		
+		verify(mockLogger).debug("No oauth token specified via supported header names");
+	}
+	
+	@Test
+	public void doFilter_shouldRefuseAVerifiedTokenFromANonMachineClient() throws Exception {
+		final String jwtToken = "header.payload.signature";
+		when(mockRequest.getHeader(HEADER_NAME_AUTH)).thenReturn("bearer " + jwtToken);
+		Properties props = new Properties();
+		props.setProperty(UserInfo.PROP_USERNAME_SERVICE_ACCOUNT, "openmrs_user");
+		props.setProperty(ServiceAccountTokenPolicy.PROP_ISSUER, "https://ehr/auth/realms/nidan");
+		props.setProperty(ServiceAccountTokenPolicy.PROP_ALLOWED_CLIENTS, "cis");
+		when(Context.getRegisteredComponent(OAUTH_PROP_BEAN_NAME, Properties.class)).thenReturn(props);
+		java.util.Map<String, Object> claimMap = new java.util.HashMap<>();
+		claimMap.put("openmrs_user", "nidan-sync");
+		claimMap.put("iss", "https://ehr/auth/realms/nidan");
+		claimMap.put("typ", "Bearer");
+		claimMap.put("azp", "nidan-gateway");
+		when(JwtUtils.parseAndVerifyToken(any(), any())).thenReturn(new DefaultClaims(claimMap));
+		
+		filter.doFilter(mockRequest, null, mockFilterChain);
+		
+		verify(mockLogger).warn("Refusing service-account login: {}", "client is not an allowed service account: nidan-gateway");
+		verifyStatic(never());
+		Context.authenticate(any());
 	}
 	
 	@Test

@@ -45,6 +45,20 @@ public class JwtUtils {
 	
 	public static JsonWebKeySet remoteJsonWebKeySet = null;
 	
+	/** Seconds a fetched remote key set is trusted before it is fetched again (default 600). */
+	public static final String OAUTH_PROP_KEYS_TTL = "keysTtlSeconds";
+	
+	static final long DEFAULT_KEYS_TTL_MS = 600_000L;
+	
+	/** At most one extra fetch per this interval for tokens with an unknown key id (no fetch storm). */
+	static final long MIN_FORCED_REFETCH_INTERVAL_MS = 30_000L;
+	
+	static long remoteKeysFetchedAt = 0L;
+	
+	static long lastForcedRefetchAt = Long.MIN_VALUE / 2;
+	
+	static java.util.function.LongSupplier clock = System::currentTimeMillis;
+	
 	public static final String[] SUPPORTED_ALGORITHMS = new String[] { AlgorithmIdentifiers.RSA_USING_SHA256,
 	        AlgorithmIdentifiers.RSA_USING_SHA384, AlgorithmIdentifiers.RSA_USING_SHA512,
 	        AlgorithmIdentifiers.RSA_PSS_USING_SHA256, AlgorithmIdentifiers.RSA_PSS_USING_SHA384,
@@ -101,8 +115,7 @@ public class JwtUtils {
 			}
 			
 			if (localPublicKey == null && StringUtils.isNotBlank(oauthProps.getProperty(OAUTH_PROP_KEYS_URL))) {
-				String keys = HttpUtils.getJsonWebKeys(oauthProps.getProperty(OAUTH_PROP_KEYS_URL).trim());
-				remoteJsonWebKeySet = new JsonWebKeySet(keys);
+				fetchRemoteKeys(oauthProps);
 			}
 			
 			keysInitialized = true;
@@ -113,12 +126,23 @@ public class JwtUtils {
 		}
 		
 		if (remoteJsonWebKeySet != null) {
+			// A key the identity provider has rotated out must stop being trusted: refresh after the TTL,
+			// and once (rate-limited) when a token names a key id the cached set does not have.
+			long now = clock.getAsLong();
+			if (oauthProps != null && now - remoteKeysFetchedAt > keysTtlMs(oauthProps)) {
+				refreshRemoteKeys(oauthProps);
+			}
 			//Select the correct key from the key set based on the details in the JWT token and extract out the public key
 			JsonWebSignature jws = new JsonWebSignature();
 			jws.setAlgorithmConstraints(new AlgorithmConstraints(PERMIT, SUPPORTED_ALGORITHMS));
 			jws.setCompactSerialization(jwt);
 			VerificationJwkSelector keySelector = new VerificationJwkSelector();
 			JsonWebKey jwk = keySelector.select(jws, remoteJsonWebKeySet.getJsonWebKeys());
+			if (jwk == null && oauthProps != null && now - lastForcedRefetchAt >= MIN_FORCED_REFETCH_INTERVAL_MS) {
+				lastForcedRefetchAt = now;
+				refreshRemoteKeys(oauthProps);
+				jwk = keySelector.select(jws, remoteJsonWebKeySet.getJsonWebKeys());
+			}
 			if (jwk != null) {
 				jws.setKey(jwk.getKey());
 				//Do a quick check of the signature, an exception will be thrown in case of an unsupported algorithm
@@ -133,6 +157,35 @@ public class JwtUtils {
 		}
 		
 		return null;
+	}
+	
+	private static void fetchRemoteKeys(Properties oauthProps) throws Exception {
+		String keys = HttpUtils.getJsonWebKeys(oauthProps.getProperty(OAUTH_PROP_KEYS_URL).trim());
+		remoteJsonWebKeySet = new JsonWebKeySet(keys);
+		remoteKeysFetchedAt = clock.getAsLong();
+	}
+	
+	/** Re-fetch; on failure keep the cached set so a short identity-provider outage does not stop logins. */
+	private static void refreshRemoteKeys(Properties oauthProps) {
+		if (StringUtils.isBlank(oauthProps.getProperty(OAUTH_PROP_KEYS_URL))) {
+			return;
+		}
+		try {
+			fetchRemoteKeys(oauthProps);
+		}
+		catch (Exception e) {
+			log.warn("Could not refresh the identity provider keys, keeping the cached set: " + e.getMessage());
+		}
+	}
+	
+	private static long keysTtlMs(Properties oauthProps) {
+		String ttl = oauthProps.getProperty(OAUTH_PROP_KEYS_TTL);
+		try {
+			return StringUtils.isBlank(ttl) ? DEFAULT_KEYS_TTL_MS : Long.parseLong(ttl.trim()) * 1000L;
+		}
+		catch (NumberFormatException e) {
+			return DEFAULT_KEYS_TTL_MS;
+		}
 	}
 	
 	/**

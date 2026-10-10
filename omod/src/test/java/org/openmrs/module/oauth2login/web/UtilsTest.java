@@ -54,9 +54,9 @@ public class UtilsTest {
 		final String idToken = "myToken";
 		PowerMockito.mockStatic(Context.class);
 		User user = new User();
-		user.setUserProperty(OAuth2LoginConstants.USER_PROP_ID_TOKEN, idToken);
 		Mockito.when(Context.getAuthenticatedUser()).thenReturn(user);
 		MockHttpServletRequest request = new MockHttpServletRequest();
+		request.getSession().setAttribute(OAuth2LoginConstants.USER_PROP_ID_TOKEN, idToken);
 		
 		String redirect = Utils.getPostLogoutRedirectUrl(request);
 		

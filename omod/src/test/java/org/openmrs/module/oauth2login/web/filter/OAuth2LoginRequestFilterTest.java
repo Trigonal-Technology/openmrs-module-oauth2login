@@ -112,6 +112,26 @@ public class OAuth2LoginRequestFilterTest {
 	}
 	
 	@Test
+	public void apiUri_shouldAnswer401NotRedirectWhenNotAuthenticated() throws Exception {
+		Context.setUserContext(new UserContext(null));
+		when(Context.isAuthenticated()).thenReturn(false);
+		for (String uri : new String[] { "/openmrs/ws/fhir2/R4/Patient", "/openmrs/ws/rest/v1/patient" }) {
+			MockHttpServletRequest request = new MockHttpServletRequest();
+			request.setContextPath("/openmrs");
+			request.setRequestURI(uri);
+			request.setServletPath("/ws");
+			HttpServletResponse response = mock(HttpServletResponse.class);
+			FilterChain chain = mock(FilterChain.class);
+			
+			filter.doFilter(request, response, chain);
+			
+			verify(response).sendError(HttpServletResponse.SC_UNAUTHORIZED);
+			verify(response, never()).sendRedirect(any(String.class));
+			verifyZeroInteractions(chain);
+		}
+	}
+	
+	@Test
 	public void servletHandledPath_shouldProceedWhenNotAuthenticated() throws Exception {
 		// setup
 		MockHttpServletRequest request = new MockHttpServletRequest();
@@ -187,9 +207,9 @@ public class OAuth2LoginRequestFilterTest {
 	public void doFilter_shouldSetLocationHeaderToRedirectUrlRestLogoutRequest() throws Exception {
 		final String idToken = "myToken";
 		User user = new User();
-		user.setUserProperty(OAuth2LoginConstants.USER_PROP_ID_TOKEN, idToken);
 		Mockito.when(Context.getAuthenticatedUser()).thenReturn(user);
 		MockHttpServletRequest request = new MockHttpServletRequest();
+		request.getSession().setAttribute(OAuth2LoginConstants.USER_PROP_ID_TOKEN, idToken);
 		HttpServletResponse response = mock(HttpServletResponse.class);
 		FilterChain chain = mock(FilterChain.class);
 		

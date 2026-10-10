@@ -2,9 +2,14 @@ package org.openmrs.module.oauth2login.authscheme;
 
 import java.lang.reflect.InvocationTargetException;
 import java.util.Collection;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.apache.commons.beanutils.BeanUtilsBean;
+import org.openmrs.Person;
+import org.openmrs.PersonName;
+import org.openmrs.Role;
 import org.openmrs.User;
 import org.openmrs.api.UserService;
 import org.slf4j.Logger;
@@ -20,15 +25,51 @@ public class UpdateUserTask implements Runnable {
 	
 	private UserInfo userInfo;
 	
+	private volatile Set<Role> assignedRoles;
+	
+	private volatile Throwable failure;
+	
 	public UpdateUserTask(UserService userService, UserInfo userInfo) {
 		this.userService = userService;
 		this.userInfo = userInfo;
 	}
 	
+	/**
+	 * The roles written by {@link #run()}, or null when the token carries no roles (roles left
+	 * unchanged).
+	 */
+	public Set<Role> getAssignedRoles() {
+		return assignedRoles;
+	}
+	
+	/**
+	 * Why run() failed, or null. Daemon.runInDaemonThreadAndWait swallows a task's exceptions, so
+	 * it is kept here.
+	 */
+	public Throwable getFailure() {
+		return failure;
+	}
+	
 	@Override
 	public void run() {
-		User user = userService.getUserByUsername(userInfo.getUsername());
-		userService.saveUser(updated(user));
+		try {
+			User user = userService.getUserByUsername(userInfo.getUsername());
+			// getUserByUsername also matches system_id; only ever update the account with this username
+			if (user == null || user.getUsername() == null || !user.getUsername().equalsIgnoreCase(userInfo.getUsername())) {
+				throw new IllegalStateException("OAuth2 user update: no account with this username");
+			}
+			Set<Role> roles = userInfo.getRoleNames() == null ? null : resolveRoles();
+			userService.saveUser(updated(user, roles));
+			assignedRoles = roles; // only once they are in the database (KC-58-06)
+		}
+		catch (Throwable t) {
+			failure = t;
+		}
+	}
+	
+	private Set<Role> resolveRoles() {
+		return userInfo.getRoleNames().stream().map(roleName -> userService.getRole(roleName)).filter(r -> r != null)
+		        .collect(Collectors.toSet());
 	}
 	
 	/**
@@ -87,12 +128,43 @@ public class UpdateUserTask implements Runnable {
 	}
 	
 	/**
+	 * Gender and the preferred name, as mapped from the user info; fields the token does not carry
+	 * stay as they are.
+	 */
+	static void copyMappedPersonFields(Person from, Person to) {
+		if (from == null || to == null) {
+			return;
+		}
+		if (from.getGender() != null) {
+			to.setGender(from.getGender());
+		}
+		PersonName name = from.getPersonName();
+		if (name == null) {
+			return;
+		}
+		PersonName current = to.getPersonName();
+		if (current == null) {
+			to.addName(name);
+			return;
+		}
+		if (name.getGivenName() != null) {
+			current.setGivenName(name.getGivenName());
+		}
+		if (name.getMiddleName() != null) {
+			current.setMiddleName(name.getMiddleName());
+		}
+		if (name.getFamilyName() != null) {
+			current.setFamilyName(name.getFamilyName());
+		}
+	}
+	
+	/**
 	 * Returns the updated user as per the user info.
 	 * 
 	 * @param user The user to update
 	 * @return The updated user.
 	 */
-	private User updated(User user) {
+	private User updated(User user, Set<Role> roles) {
 		
 		try {
 			User openmrsUser = userInfo.getOpenmrsUser();
@@ -110,13 +182,16 @@ public class UpdateUserTask implements Runnable {
 			}
 			
 			new NullAwareBeanUtilsBean().copyProperties(user, openmrsUser);
+			// The copy above skips the person: OpenMRS objects are equal by uuid and the uuids were just made equal, so
+			// a name or gender changed in Keycloak never reached an existing (e.g. linked) account. Copy those fields.
+			copyMappedPersonFields(openmrsUser.getPerson(), user.getPerson());
 		}
 		catch (IllegalAccessException | InvocationTargetException e) {
 			log.error("Something went wrong when copying attributes from the user info to the OpenMRS user, the OpenMRS user might not have been updated properly.", e);
 		}
 		
-		if (userInfo.getRoleNames() != null) {
-			user.setRoles(userInfo.getRoleNames().stream().map(roleName -> userService.getRole(roleName)).filter(r -> r != null).collect(Collectors.toSet()));
+		if (roles != null) {
+			user.setRoles(new HashSet<>(roles));
 		}
 		
 		return user;

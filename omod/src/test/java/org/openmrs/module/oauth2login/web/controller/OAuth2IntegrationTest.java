@@ -164,7 +164,7 @@ public abstract class OAuth2IntegrationTest extends BaseModuleContextSensitiveTe
 		Assert.assertFalse(Context.isAuthenticated());
 		
 		// replay
-		controller.login();
+		controller.login(new org.springframework.mock.web.MockHttpServletRequest());
 		
 		// verif
 		User user = Context.getAuthenticatedUser();
